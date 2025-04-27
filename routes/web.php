@@ -13,4 +13,5 @@ Route::put('/libraries/{library}', [Libraries::class, 'update']);
 
 Route::delete('/libraries/{library}', [Libraries::class, 'delete']);
 
-Route::get('/aggregate', [Libraries::class, 'aggregate']);
+Route::post('/aggregate', [Libraries::class, 'aggregate'])->name('aggregate');
+Route::get('/filter', [Libraries::class, 'filter']);

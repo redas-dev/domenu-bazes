@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -145,7 +147,6 @@ class Libraries extends Controller
             'Palaikymo_busena' => 'required|string',
             'Savininkas' => 'required|string',
             'versions' => 'required|array',
-            'versions.*.id' => 'required|integer',
             'versions.*.Veiksmas' => 'required|string',
             'versions.*.Versija' => 'required|string',
             'versions.*.Pakeitimu_aprasas' => 'required|string',
@@ -265,15 +266,75 @@ class Libraries extends Controller
         }
     }
 
+    public function filter()
+    {
+        return view('filter');
+    }
+
     public function aggregate(Request $request)
     {
-        $query = DB::select('
-            SELECT b.Pavadinimas, v.Slapyvardis, vr.Atsisiuntimu_skaicius FROM Atsisiuntimai as a
-            
-            LEFT JOIN Bibliotekos as b on a.fk_Biblioteka = b.id
-            LEFT JOIN Bibliotekos_priziuretojas as bp on b.id = bp.fk_Biblioteka
-            LEFT JOIN Vartotojai as v on v.id = bp.fk_Vartotojas
-            LEFT JOIN Versijos as vr on vr.fk_Biblioteka = b.id
-            GROUP BY b.id');
+        $filters = $request->except('_token');
+
+        $baseSql = "SELECT
+                REPLACE(u.Slapyvardis, '_', ' ') AS Username,
+                b.Pavadinimas AS LibraryName,
+                b.Privati,
+                b.Sukurimo_data AS CreationDate,
+                COALESCE(COUNT(DISTINCT b.id), 0) AS MaintainedLibraryCount,
+                SUM(IF(f.Dydis >= 0, f.Dydis, 0)) AS TotalFileSize,
+                ROUND(COALESCE(AVG(f.Dydis), 0), 1) AS AverageFileSize,
+                COALESCE(MAX(f.Atsisiuntimu_skaicius), 0) AS MaxSingleFileDownloads
+            FROM
+                Vartotojai u
+            LEFT JOIN
+                Bibliotekos_priziuretojas bp ON u.id = bp.fk_Vartotojas
+            LEFT JOIN
+                Bibliotekos b ON bp.fk_Biblioteka = b.id
+            LEFT JOIN
+                Failai f ON b.id = f.fk_Biblioteka
+            :where_clause:
+            GROUP BY
+                u.id,
+                Username DESC,
+                LibraryName ASC,
+                b.Privati,
+                b.Sukurimo_data
+            WITH ROLLUP;
+        ";
+
+        $whereClauses = [];
+        $bindings = [];
+
+        if (isset($filters['private']) && in_array($filters['private'], [0, 1])) {
+            $whereClauses[] = "b.Privati = ?";
+            $bindings[] = $filters['private'];
+        }
+
+        if (isset($filters['createdFrom'])) {
+            $whereClauses[] = "b.Sukurimo_Data >= ?";
+            $bindings[] = Carbon::make($filters['createdFrom'])->toDateTimeString();
+        }
+
+        if (isset($filters['createdTo'])) {
+            $whereClauses[] = "b.Sukurimo_Data < ?";
+            $bindings[] = Carbon::make($filters['createdTo'])->addDay()->toDateTimeString();
+        }
+
+        if (isset($filters['language']))
+        {
+            $whereClauses[] = "b.Kalba LIKE ?";
+            $bindings[] = '%'.$filters['language'].'%';
+        }
+
+        $whereSql = "";
+        if (!empty($whereClauses)) {
+            $whereSql = "WHERE " . implode(" AND ", $whereClauses);
+        }
+
+        $finalSql = str_replace(':where_clause:', $whereSql, $baseSql);
+
+        $aggregatedData = DB::select($finalSql, $bindings);
+
+        return view('aggregate', ['aggregatedData' => Collection::make($aggregatedData)->groupBy(['Username', 'LibraryName'])]);
     }
 }
